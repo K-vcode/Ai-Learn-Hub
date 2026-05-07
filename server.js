@@ -89,6 +89,10 @@ app.post("/api/login", async (req, res) => {
     if (!user) return res.status(400).json({ message: "Invalid email/username or password" });
     const isMatch = await bcrypt.compare(password, user.password);
     if (!isMatch) return res.status(400).json({ message: "Invalid email/username or password" });
+    if (!process.env.JWT_SECRET) {
+      console.error("JWT_SECRET is missing in environment");
+      return res.status(500).json({ success: false, message: "Server configuration error" });
+    }
     const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, { expiresIn: "1d" });
     res.json({ success: true, message: "Login successful", token, user: { id: user._id, username: user.username, email: user.email, fullname: user.fullname } });
   } catch (err) {
