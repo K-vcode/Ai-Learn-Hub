@@ -21,7 +21,8 @@ const app = express();
 const allowedOrigins = [
   'http://localhost:3000',
   'http://127.0.0.1:3000',
-  'https://ai-learn-hub.onrender.com'
+  'https://ai-learn-hub.onrender.com',
+  'https://localhost'  // ✅ Added for Capacitor Android app
 ];
 
 const corsOptions = {
