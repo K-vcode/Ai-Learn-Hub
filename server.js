@@ -12,57 +12,23 @@ const { pipeline } = require("@xenova/transformers");
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-
 const app = express();
 
-// ==========================
-// ✅ FIXED CORS CONFIGURATION
-// ==========================
-const allowedOrigins = [
-  'http://localhost:3000',
-  'http://127.0.0.1:3000',
-  'https://ai-learn-hub.onrender.com',
-  'https://localhost'  // ✅ Added for Capacitor Android app
-];
+app.use(cors({
+  origin: "*",
+  methods: ["GET", "POST", "PUT", "DELETE"],
+  allowedHeaders: ["Content-Type", "Authorization"]
+}));
 
-const corsOptions = {
-  origin: function (origin, callback) {
-    // Allow requests with no origin (like mobile apps or curl)
-    if (!origin) return callback(null, true);
-    if (allowedOrigins.indexOf(origin) !== -1) {
-      callback(null, true);
-    } else {
-      callback(new Error('Not allowed by CORS'));
-    }
-  },
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
-  credentials: true,      // Allow cookies/auth headers
-  optionsSuccessStatus: 200
-};
-
-// Apply CORS middleware globally
-app.use(cors(corsOptions));
-
-// Handle preflight explicitly for all routes (Express already does this, but double‑check)
-app.options('*', cors(corsOptions));
+app.use(express.json({ limit: '10mb' }));
 
 // ==========================
-// ... ALL YOUR EXISTING CODE BELOW ... 
-// (your Mongoose schemas, routes, etc. – nothing else changes)
-// ==========================
-
 // ✅ MONGODB CONNECTION
+// ==========================
 mongoose.connect(process.env.MONGO_URI)
-  .then(() => console.log("✅ MongoDB Connected"))
-  .catch(err => console.log("❌ MongoDB Error:", err));
+.then(() => console.log("✅ MongoDB Connected"))
+.catch(err => console.log("❌ MongoDB Error:", err));
 
-// ... (keep all your schemas and routes exactly as they are) ...
-
-app.listen(PORT, () => {
-  console.log(`🚀 Server running on http://localhost:${PORT}`);
-  console.log(`⏳ Vision model will load in the background (20-30 sec first time)`);
-});
 // ==========================
 // ✅ USER SCHEMA
 // ==========================
@@ -124,10 +90,6 @@ app.post("/api/login", async (req, res) => {
     if (!user) return res.status(400).json({ message: "Invalid email/username or password" });
     const isMatch = await bcrypt.compare(password, user.password);
     if (!isMatch) return res.status(400).json({ message: "Invalid email/username or password" });
-    if (!process.env.JWT_SECRET) {
-      console.error("JWT_SECRET is missing in environment");
-      return res.status(500).json({ success: false, message: "Server configuration error" });
-    }
     const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, { expiresIn: "1d" });
     res.json({ success: true, message: "Login successful", token, user: { id: user._id, username: user.username, email: user.email, fullname: user.fullname } });
   } catch (err) {
