@@ -15,10 +15,16 @@ const os = require('os');
 const app = express();
 
 app.use(cors({
-  origin: "*",
-  methods: ["GET", "POST", "PUT", "DELETE"],
-  allowedHeaders: ["Content-Type", "Authorization"]
+  origin: [
+    "http://localhost:3000",
+    "https://localhost",
+    "capacitor://localhost"
+  ],
+  methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization"],
+  credentials: true
 }));
+
 
 app.use(express.json({ limit: '10mb' }));
 
