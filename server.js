@@ -274,7 +274,14 @@ app.post("/api/shared-quiz", async (req, res) => {
 let imageModel = null;
 let modelLoading = false;
 
-(async () => {
+async function loadImageModel() {
+  if (imageModel) return imageModel;
+  if (modelLoading) {
+    while (modelLoading) {
+      await new Promise(resolve => setTimeout(resolve, 500));
+    }
+    return imageModel;
+  }
   try {
     console.log("🔄 Loading image recognition model (first time: 20-30 seconds)...");
     modelLoading = true;
@@ -286,7 +293,20 @@ let modelLoading = false;
   } finally {
     modelLoading = false;
   }
-})();
+  return imageModel;
+}
+
+app.get("/", (req, res) => {
+  res.json({ success: true, message: "AI Learn Hub backend is running" });
+});
+
+app.get("/api/health", (req, res) => {
+  res.json({
+    success: true,
+    groqConfigured: Boolean(process.env.GROQ_API_KEY),
+    mongoConfigured: Boolean(process.env.MONGO_URI)
+  });
+});
 
 // ==========================
 // 🖼️ MAIN LOCAL IMAGE AI (OCR FIRST, THEN VISION FALLBACK)
@@ -362,6 +382,7 @@ app.post("/api/local-image-ai", async (req, res) => {
 
     // 3. No text found → fallback to vision model (visual description)
     console.log("🖼️ No text detected. Using vision model for visual description.");
+    await loadImageModel();
     if (!imageModel) {
       return res.status(200).json({
         success: true,
@@ -539,8 +560,10 @@ app.post("/api/ask-about-image", async (req, res) => {
 
     // ---- Step 2: If no text, try vision model (only as last resort) ----
     let imageDescription = "";
-    if (!ocrSuccess && imageModel) {
+    if (!ocrSuccess) {
       try {
+        await loadImageModel();
+        if (!imageModel) throw new Error("Vision model is not available");
         const tempDir = os.tmpdir();
         const tempFilePath = path.join(tempDir, `ask_img_${Date.now()}.jpg`);
         fs.writeFileSync(tempFilePath, Buffer.from(base64String, 'base64'));
