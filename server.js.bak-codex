@@ -1,4 +1,4 @@
-﻿require("dotenv").config();
+require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
 const mongoose = require("mongoose");
@@ -14,44 +14,29 @@ const path = require('path');
 const os = require('os');
 const app = express();
 
-const allowedOrigins = new Set([
-  "http://localhost:3000",
-  "http://127.0.0.1:3000",
-  "http://192.168.1.105:3000",
-  "http://192.168.1.105:5000",
-  "https://localhost",
-  "http://localhost",
-  "capacitor://localhost",
-  "ionic://localhost",
-  ...(process.env.CLIENT_ORIGINS || "")
-    .split(",")
-    .map((origin) => origin.trim())
-    .filter(Boolean)
-]);
-
 app.use(cors({
-  origin(origin, callback) {
-    if (!origin || allowedOrigins.has(origin)) return callback(null, true);
-    return callback(new Error(`CORS blocked origin: ${origin}`));
-  },
+  origin: [
+    "http://localhost:3000",
+    "https://localhost",
+    "capacitor://localhost"
+  ],
   methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "Authorization", "Accept"],
+  allowedHeaders: ["Content-Type", "Authorization"],
   credentials: true
 }));
-app.options("*", cors());
 
 
 app.use(express.json({ limit: '10mb' }));
 
 // ==========================
-// âœ… MONGODB CONNECTION
+// ✅ MONGODB CONNECTION
 // ==========================
 mongoose.connect(process.env.MONGO_URI)
-.then(() => console.log("âœ… MongoDB Connected"))
-.catch(err => console.log("âŒ MongoDB Error:", err));
+.then(() => console.log("✅ MongoDB Connected"))
+.catch(err => console.log("❌ MongoDB Error:", err));
 
 // ==========================
-// âœ… USER SCHEMA
+// ✅ USER SCHEMA
 // ==========================
 const UserSchema = new mongoose.Schema({
   fullname: String,
@@ -62,7 +47,7 @@ const UserSchema = new mongoose.Schema({
 const User = mongoose.model("User", UserSchema);
 
 // ==========================
-// ðŸ“Š SCOREBOARD SCHEMA
+// 📊 SCOREBOARD SCHEMA
 // ==========================
 const QuizAttemptSchema = new mongoose.Schema({
   userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
@@ -78,7 +63,7 @@ const QuizAttemptSchema = new mongoose.Schema({
 const QuizAttempt = mongoose.model("QuizAttempt", QuizAttemptSchema);
 
 // ==========================
-// ðŸ” SIGNUP API
+// 🔐 SIGNUP API
 // ==========================
 app.post("/api/signup", async (req, res) => {
   try {
@@ -96,7 +81,7 @@ app.post("/api/signup", async (req, res) => {
 });
 
 // ==========================
-// ðŸ” LOGIN API
+// 🔐 LOGIN API
 // ==========================
 app.post("/api/login", async (req, res) => {
   try {
@@ -120,12 +105,12 @@ app.post("/api/login", async (req, res) => {
 });
 
 // ==========================
-// ðŸ¤– GROQ AI SETUP
+// 🤖 GROQ AI SETUP
 // ==========================
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
 // ==========================
-// ðŸ¤– AI CONTENT GENERATION API (language aware)
+// 🤖 AI CONTENT GENERATION API (language aware)
 // ==========================
 app.post("/api/generate-content", async (req, res) => {
   try {
@@ -141,19 +126,19 @@ app.post("/api/generate-content", async (req, res) => {
     });
     res.json({ success: true, result: chatCompletion.choices[0].message.content });
   } catch (err) {
-    console.log("âŒ ERROR:", err.message);
+    console.log("❌ ERROR:", err.message);
     res.status(500).json({ success: false, error: err.message });
   }
 });
 
 // ==========================
-// ðŸ–¼ï¸ FREE OCR API WITH AI
+// 🖼️ FREE OCR API WITH AI
 // ==========================
 app.post("/api/analyze-image", async (req, res) => {
   try {
     const { imageBase64, prompt, language } = req.body;
     if (!imageBase64) return res.status(400).json({ success: false, error: "Image is required" });
-    console.log("ðŸ” Analyzing image with free OCR.space API...");
+    console.log("🔍 Analyzing image with free OCR.space API...");
     const formData = new FormData();
     formData.append('base64Image', `data:image/jpeg;base64,${imageBase64}`);
     formData.append('apikey', 'helloworld');
@@ -161,7 +146,7 @@ app.post("/api/analyze-image", async (req, res) => {
     formData.append('isOverlayRequired', 'false');
     const response = await axios.post('https://api.ocr.space/parse/image', formData, { headers: formData.getHeaders() });
     const extractedText = response.data.ParsedResults?.[0]?.ParsedText || "No text found";
-    console.log("âœ… Text extracted successfully");
+    console.log("✅ Text extracted successfully");
     if (prompt && extractedText !== "No text found") {
       let aiPrompt = `${prompt}\n\nHere is the text extracted from the image:\n\n${extractedText}`;
       if (!prompt || prompt.trim() === "") aiPrompt = `Please analyze and explain the following text extracted from an image:\n\n${extractedText}`;
@@ -175,13 +160,13 @@ app.post("/api/analyze-image", async (req, res) => {
     }
     res.json({ success: true, extractedText, text: extractedText, raw: response.data });
   } catch (error) {
-    console.error("âŒ OCR Error:", error.response?.data || error.message);
+    console.error("❌ OCR Error:", error.response?.data || error.message);
     res.status(500).json({ success: false, error: "Image analysis failed", details: error.message });
   }
 });
 
 // ==========================
-// ðŸ–¼ï¸ IMAGE + AI COMBINED ANALYSIS
+// 🖼️ IMAGE + AI COMBINED ANALYSIS
 // ==========================
 app.post("/api/analyze-image-with-ai", async (req, res) => {
   try {
@@ -206,13 +191,13 @@ app.post("/api/analyze-image-with-ai", async (req, res) => {
     try { if (parsedResponse.trim().startsWith('{') || parsedResponse.trim().startsWith('[')) parsedResponse = JSON.parse(parsedResponse); } catch(e) {}
     res.json({ success: true, extractedText, result: parsedResponse, task: specificTask || "analysis" });
   } catch (error) {
-    console.error("âŒ Error:", error.response?.data || error.message);
+    console.error("❌ Error:", error.response?.data || error.message);
     res.status(500).json({ success: false, error: "Analysis failed", details: error.message });
   }
 });
 
 // ==========================
-// ðŸ“ NOTE2QUIZ - GENERATE QUIZ FROM NOTES
+// 📝 NOTE2QUIZ - GENERATE QUIZ FROM NOTES
 // ==========================
 app.post("/api/generate-quiz", async (req, res) => {
   try {
@@ -234,13 +219,13 @@ app.post("/api/generate-quiz", async (req, res) => {
     quizData.questions = quizData.questions.map((q, i) => ({ id: q.id || i+1, text: q.text || q.question || "Missing", options: q.options || ["A","B","C","D"], correct: q.correct !== undefined ? q.correct : 0, explanation: q.explanation || "No explanation" }));
     res.json({ success: true, quiz: quizData });
   } catch (error) {
-    console.error("âŒ Quiz generation error:", error);
+    console.error("❌ Quiz generation error:", error);
     res.status(500).json({ success: false, error: error.message });
   }
 });
 
 // ==========================
-// ðŸ“Š SCOREBOARD API ENDPOINTS
+// 📊 SCOREBOARD API ENDPOINTS
 // ==========================
 app.post("/api/save-quiz-score", async (req, res) => {
   try {
@@ -271,7 +256,7 @@ app.delete("/api/clear-quiz-history", async (req, res) => {
 });
 
 // ==========================
-// ðŸ”— SHARED QUIZ ROUTE
+// 🔗 SHARED QUIZ ROUTE
 // ==========================
 app.post("/api/shared-quiz", async (req, res) => {
   try {
@@ -284,7 +269,7 @@ app.post("/api/shared-quiz", async (req, res) => {
 });
 
 // ==========================
-// ðŸ¤– LOCAL AI IMAGE MODEL (Xenova pipeline) - FALLBACK FOR VISUAL DESCRIPTION
+// 🤖 LOCAL AI IMAGE MODEL (Xenova pipeline) - FALLBACK FOR VISUAL DESCRIPTION
 // ==========================
 let imageModel = null;
 let modelLoading = false;
@@ -298,12 +283,12 @@ async function loadImageModel() {
     return imageModel;
   }
   try {
-    console.log("ðŸ”„ Loading image recognition model (first time: 20-30 seconds)...");
+    console.log("🔄 Loading image recognition model (first time: 20-30 seconds)...");
     modelLoading = true;
     imageModel = await pipeline("image-to-text", "Xenova/vit-gpt2-image-captioning");
-    console.log("âœ… Image Recognition AI Model Loaded Successfully!");
+    console.log("✅ Image Recognition AI Model Loaded Successfully!");
   } catch (error) {
-    console.error("âŒ Failed to load vision model:", error.message);
+    console.error("❌ Failed to load vision model:", error.message);
     imageModel = null;
   } finally {
     modelLoading = false;
@@ -324,7 +309,7 @@ app.get("/api/health", (req, res) => {
 });
 
 // ==========================
-// ðŸ–¼ï¸ MAIN LOCAL IMAGE AI (OCR FIRST, THEN VISION FALLBACK)
+// 🖼️ MAIN LOCAL IMAGE AI (OCR FIRST, THEN VISION FALLBACK)
 // ==========================
 app.post("/api/local-image-ai", async (req, res) => {
   let tempFilePath = null;
@@ -335,7 +320,7 @@ app.post("/api/local-image-ai", async (req, res) => {
       return res.status(400).json({ success: false, error: "Image required" });
     }
 
-    console.log("ðŸ” Step 1: Attempting OCR to extract text from image...");
+    console.log("🔍 Step 1: Attempting OCR to extract text from image...");
     let base64String = imageBase64;
     if (imageBase64.includes(',')) {
       base64String = imageBase64.split(',')[1];
@@ -361,20 +346,20 @@ app.post("/api/local-image-ai", async (req, res) => {
       extractedText = extractedText.trim();
       if (extractedText && extractedText !== "No text found" && extractedText.length > 10) {
         ocrSuccess = true;
-        console.log("âœ… OCR succeeded. Extracted text length:", extractedText.length);
+        console.log("✅ OCR succeeded. Extracted text length:", extractedText.length);
       } else {
-        console.log("âš ï¸ OCR found little or no text. Will fallback to vision.");
+        console.log("⚠️ OCR found little or no text. Will fallback to vision.");
       }
     } catch (ocrErr) {
       console.log("OCR service error:", ocrErr.message);
     }
 
-    // 2. If OCR found meaningful text â†’ explain the text content (like a teacher)
+    // 2. If OCR found meaningful text → explain the text content (like a teacher)
     if (ocrSuccess) {
-      console.log("ðŸ“– Explaining extracted text content (no visual description)");
+      console.log("📖 Explaining extracted text content (no visual description)");
       const languageMap = { en: "English", ta: "Tamil", hi: "Hindi" };
       const targetLang = languageMap[language] || "English";
-      const systemMsg = `You are an expert teacher. Explain the following text in a very detailed, simple, and easy-to-understand way. Provide the original meaning, context, and a full explanation. Do NOT describe the image itself â€“ only explain the written content. Respond in ${targetLang}.`;
+      const systemMsg = `You are an expert teacher. Explain the following text in a very detailed, simple, and easy-to-understand way. Provide the original meaning, context, and a full explanation. Do NOT describe the image itself – only explain the written content. Respond in ${targetLang}.`;
       const userMsg = `Text from image:\n\n${extractedText}\n\nPlease explain this clearly and completely.`;
 
       const groqResponse = await groq.chat.completions.create({
@@ -389,19 +374,19 @@ app.post("/api/local-image-ai", async (req, res) => {
       const explanation = groqResponse.choices[0].message.content;
       return res.json({
         success: true,
-        aiAnalysis: `ðŸ“– **Content Explanation**\n\n${explanation}`,
+        aiAnalysis: `📖 **Content Explanation**\n\n${explanation}`,
         extractedText: extractedText,
         mode: "ocr_explanation"
       });
     }
 
-    // 3. No text found â†’ fallback to vision model (visual description)
-    console.log("ðŸ–¼ï¸ No text detected. Using vision model for visual description.");
+    // 3. No text found → fallback to vision model (visual description)
+    console.log("🖼️ No text detected. Using vision model for visual description.");
     await loadImageModel();
     if (!imageModel) {
       return res.status(200).json({
         success: true,
-        aiAnalysis: `ðŸ“· **AI Vision Model Loading**\n\nPlease wait 30 seconds and try again.`,
+        aiAnalysis: `📷 **AI Vision Model Loading**\n\nPlease wait 30 seconds and try again.`,
         loading: true
       });
     }
@@ -413,7 +398,7 @@ app.post("/api/local-image-ai", async (req, res) => {
 
     const visionResult = await imageModel(tempFilePath);
     const shortCaption = visionResult[0].generated_text;
-    console.log("âœ… Vision caption:", shortCaption);
+    console.log("✅ Vision caption:", shortCaption);
 
     fs.unlinkSync(tempFilePath);
     tempFilePath = null;
@@ -436,27 +421,27 @@ app.post("/api/local-image-ai", async (req, res) => {
         max_tokens: 800
       });
       const answer = groqResponse.choices[0].message.content;
-      return res.json({ success: true, aiAnalysis: `ðŸ“· **Image Analysis**\n\n${answer}\n\n*(visual description: ${shortCaption})*` });
+      return res.json({ success: true, aiAnalysis: `📷 **Image Analysis**\n\n${answer}\n\n*(visual description: ${shortCaption})*` });
     } else {
-      // No text and no prompt â€“ just return short caption
-      return res.json({ success: true, aiAnalysis: `ðŸ“· **Image Analysis**\n\n${shortCaption}` });
+      // No text and no prompt – just return short caption
+      return res.json({ success: true, aiAnalysis: `📷 **Image Analysis**\n\n${shortCaption}` });
     }
 
   } catch (error) {
-    console.error("âŒ Image analysis error:", error);
+    console.error("❌ Image analysis error:", error);
     if (tempFilePath && fs.existsSync(tempFilePath)) {
       try { fs.unlinkSync(tempFilePath); } catch(e) {}
     }
     res.status(200).json({
       success: false,
       error: error.message,
-      aiAnalysis: "âš ï¸ Analysis failed. Please try again."
+      aiAnalysis: "⚠️ Analysis failed. Please try again."
     });
   }
 });
 
 // ==========================
-// ðŸ†• OCR + TRANSLATION + VOICE SUPPORT (ENHANCED)
+// 🆕 OCR + TRANSLATION + VOICE SUPPORT (ENHANCED)
 // ==========================
 async function translateText(text, targetLang) {
   if (!text || text.trim() === "" || targetLang === "en") return text;
@@ -527,12 +512,12 @@ app.post("/api/ocr-and-read", async (req, res) => {
       targetLanguage: targetLang
     });
   } catch (error) {
-    console.error("âŒ OCR error:", error.message);
+    console.error("❌ OCR error:", error.message);
     res.status(500).json({ success: false, error: error.message });
   }
 });
 // ==========================
-// ðŸŽ¤ ASK ABOUT IMAGE (voice assistant uses this)
+// 🎤 ASK ABOUT IMAGE (voice assistant uses this)
 // ==========================
 app.post("/api/ask-about-image", async (req, res) => {
   try {
@@ -545,7 +530,7 @@ app.post("/api/ask-about-image", async (req, res) => {
       return res.status(400).json({ success: false, error: "Question required" });
     }
 
-    console.log("ðŸŽ¤ Voice assistant question:", question);
+    console.log("🎤 Voice assistant question:", question);
     let base64String = imageBase64;
     if (imageBase64.includes(',')) base64String = imageBase64.split(',')[1];
 
@@ -567,7 +552,7 @@ app.post("/api/ask-about-image", async (req, res) => {
       extractedText = extractedText.trim();
       if (extractedText && extractedText !== "No text found" && extractedText.length > 10) {
         ocrSuccess = true;
-        console.log("âœ… OCR extracted text length:", extractedText.length);
+        console.log("✅ OCR extracted text length:", extractedText.length);
       }
     } catch (err) {
       console.log("OCR error:", err.message);
@@ -585,7 +570,7 @@ app.post("/api/ask-about-image", async (req, res) => {
         const visionResult = await imageModel(tempFilePath);
         imageDescription = visionResult[0].generated_text;
         fs.unlinkSync(tempFilePath);
-        console.log("ðŸ“· Vision description:", imageDescription);
+        console.log("📷 Vision description:", imageDescription);
       } catch (err) {
         console.log("Vision error:", err.message);
       }
@@ -625,28 +610,23 @@ Respond in ${targetLang} language only.`;
     res.json({ success: true, answer, hasText: ocrSuccess });
 
   } catch (error) {
-    console.error("âŒ Ask about image error:", error);
+    console.error("❌ Ask about image error:", error);
     res.status(500).json({ success: false, error: error.message });
   }
 });
 // ==================== RESUME ANALYZER (NO API KEY) ====================
 
 const multer = require("multer");
-const pdfParse = require("pdf-parse");
+const { PDFParse } = require("pdf-parse");
 const mammoth = require("mammoth");
 
 // Multer config
 const upload = multer({
   storage: multer.memoryStorage(),
   fileFilter: (req, file, cb) => {
-    const allowedMimeTypes = [
-      "application/pdf",
-      "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-    ];
-    const allowedExtensions = [".pdf", ".docx"];
-    const ext = path.extname(file.originalname || "").toLowerCase();
-    if (allowedMimeTypes.includes(file.mimetype) || allowedExtensions.includes(ext)) cb(null, true);
-    else cb(new Error("Only PDF and DOCX files are allowed"));
+    const allowed = ["application/pdf", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"];
+    if (allowed.includes(file.mimetype)) cb(null, true);
+    else cb(new Error("Only PDF and DOCX allowed"), false);
   },
   limits: { fileSize: 5 * 1024 * 1024 }
 });
@@ -669,34 +649,38 @@ const ResumeAnalysis = mongoose.model("ResumeAnalysis", resumeAnalysisSchema);
 
 // Authentication middleware (reuse your JWT)
 const authMiddleware = (req, res, next) => {
-  const token = req.headers.authorization?.startsWith("Bearer ") ? req.headers.authorization.split(" ")[1] : null;
-  if (!token) return res.status(401).json({ success: false, error: "Unauthorized" });
+  const token = req.headers.authorization?.split(" ")[1];
+  if (!token) return res.status(401).json({ error: "Unauthorized" });
   try {
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
     req.userId = decoded.id;
     next();
   } catch {
-    res.status(401).json({ success: false, error: "Invalid token" });
+    res.status(401).json({ error: "Invalid token" });
   }
 };
 
 // Text extraction helpers
 const extractPDF = async (buffer) => {
-  const data = await pdfParse(buffer);
-  return data.text || "";
+  const parser = new PDFParse({ data: buffer });
+  try {
+    const data = await parser.getText();
+    return data.text;
+  } finally {
+    await parser.destroy();
+  }
 };
 const extractDOCX = async (buffer) => {
   const result = await mammoth.extractRawText({ buffer });
   return result.value;
 };
-const extractText = async (buffer, mimeType, fileName = "") => {
-  const ext = path.extname(fileName).toLowerCase();
-  if (mimeType === "application/pdf" || ext === ".pdf") return extractPDF(buffer);
-  if (mimeType === "application/vnd.openxmlformats-officedocument.wordprocessingml.document" || ext === ".docx") return extractDOCX(buffer);
+const extractText = async (buffer, mimeType) => {
+  if (mimeType === "application/pdf") return extractPDF(buffer);
+  if (mimeType === "application/vnd.openxmlformats-officedocument.wordprocessingml.document") return extractDOCX(buffer);
   throw new Error("Unsupported file type");
 };
 
-// Local ruleâ€‘based analysis (no API key)
+// Local rule‑based analysis (no API key)
 const analyzeResume = (text) => {
   const t = text.toLowerCase();
   const allSkills = [
@@ -708,9 +692,9 @@ const analyzeResume = (text) => {
   const missing = allSkills.filter(s => !t.includes(s)).slice(0, 8);
 
   const grammar = [];
-  if (t.includes("teh")) grammar.push("'teh' â†’ 'the'");
-  if (t.includes("recieve")) grammar.push("'recieve' â†’ 'receive'");
-  if (t.includes("acheive")) grammar.push("'acheive' â†’ 'achieve'");
+  if (t.includes("teh")) grammar.push("'teh' → 'the'");
+  if (t.includes("recieve")) grammar.push("'recieve' → 'receive'");
+  if (t.includes("acheive")) grammar.push("'acheive' → 'achieve'");
   if (grammar.length === 0) grammar.push("No obvious spelling errors.");
 
   const suggestions = [];
@@ -718,7 +702,7 @@ const analyzeResume = (text) => {
   if (!t.includes("quantifiable") && !t.includes("%")) suggestions.push("Add quantifiable achievements.");
   if (found.length < 4) suggestions.push("Include more relevant technical skills.");
   if (!t.includes("linkedin")) suggestions.push("Add LinkedIn profile link.");
-  if (suggestions.length === 0) suggestions.push("Resume looks strong â€“ keep updating!");
+  if (suggestions.length === 0) suggestions.push("Resume looks strong – keep updating!");
 
   const strengths = [];
   if (found.length > 2) strengths.push(`Technical skills: ${found.slice(0,3).join(", ")}`);
@@ -727,7 +711,7 @@ const analyzeResume = (text) => {
   if (strengths.length === 0) strengths.push("Clear structure.");
 
   const weaknesses = [];
-  if (text.length < 800) weaknesses.push("Resume too short â€“ add more content.");
+  if (text.length < 800) weaknesses.push("Resume too short – add more content.");
   if (found.length < 3) weaknesses.push("Limited technical skills listed.");
   if (!t.includes("experience")) weaknesses.push("No clear work experience section.");
   if (weaknesses.length === 0) weaknesses.push("Could be tailored for specific roles.");
@@ -759,43 +743,30 @@ const analyzeResume = (text) => {
 };
 
 // API endpoints
-app.post("/api/resume/analyze", authMiddleware, (req, res) => {
-  upload.single("resume")(req, res, async (uploadErr) => {
-    try {
-      if (uploadErr) {
-        const status = uploadErr.code === "LIMIT_FILE_SIZE" ? 413 : 400;
-        return res.status(status).json({ success: false, error: uploadErr.message });
-      }
-      if (!req.file) return res.status(400).json({ success: false, error: "No file uploaded" });
-
-      const rawText = await extractText(req.file.buffer, req.file.mimetype, req.file.originalname);
-      const cleaned = rawText.replace(/\s+/g, " ").trim();
-      if (!cleaned) {
-        return res.status(400).json({
-          success: false,
-          error: "Could not extract text from this resume. Please upload a text-based PDF or DOCX file."
-        });
-      }
-
-      const analysis = analyzeResume(cleaned);
-      const analysisWithText = {
-        ...analysis,
-        fileName: req.file.originalname,
-        extractedText: cleaned.substring(0, 2000)
-      };
-      const saved = new ResumeAnalysis({
-        user: req.userId,
-        fileName: req.file.originalname,
-        extractedText: analysisWithText.extractedText,
-        ...analysis
-      });
-      await saved.save();
-      res.json({ success: true, analysis: analysisWithText, analysisId: saved._id });
-    } catch (err) {
-      console.error("Resume analyze error:", err);
-      res.status(500).json({ success: false, error: err.message || "Resume analysis failed" });
-    }
-  });
+app.post("/api/resume/analyze", authMiddleware, upload.single("resume"), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: "No file uploaded" });
+    const rawText = await extractText(req.file.buffer, req.file.mimetype);
+    const cleaned = rawText.replace(/\s+/g, " ").trim();
+    if (!cleaned) return res.status(400).json({ error: "Could not extract text from this resume. Please upload a text-based PDF or DOCX file." });
+    const analysis = analyzeResume(cleaned);
+    const analysisWithText = {
+      ...analysis,
+      fileName: req.file.originalname,
+      extractedText: cleaned.substring(0, 2000)
+    };
+    const saved = new ResumeAnalysis({
+      user: req.userId,
+      fileName: req.file.originalname,
+      extractedText: analysisWithText.extractedText,
+      ...analysis
+    });
+    await saved.save();
+    res.json({ analysis: analysisWithText, analysisId: saved._id });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 app.get("/api/resume/history", authMiddleware, async (req, res) => {
@@ -842,7 +813,7 @@ app.post("/api/resume/report", authMiddleware, async (req, res) => {
         <h2>Suggestions</h2><ul>${analysis.suggestions.map(s=>`<li>${s}</li>`).join("")}</ul>
         <h2>Strengths</h2><ul>${analysis.strengths.map(s=>`<li>${s}</li>`).join("")}</ul>
         <h2>Weaknesses</h2><ul>${analysis.weaknesses.map(s=>`<li>${s}</li>`).join("")}</ul>
-        <h2>Best Roles</h2><ul>${analysis.matchingRoles.map(r=>`<li>${r.role} â€“ ${r.matchPercentage}%</li>`).join("")}</ul>
+        <h2>Best Roles</h2><ul>${analysis.matchingRoles.map(r=>`<li>${r.role} – ${r.matchPercentage}%</li>`).join("")}</ul>
       </body></html>`;
     res.json({ html });
   } catch (err) {
@@ -850,12 +821,10 @@ app.post("/api/resume/report", authMiddleware, async (req, res) => {
   }
 });
 // ==========================
-// ðŸš€ SERVER START
+// 🚀 SERVER START
 // ==========================
 const PORT = process.env.PORT || 5000;
 
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`Server running on port ${PORT}`);
 });
-
-
