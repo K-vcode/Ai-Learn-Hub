@@ -614,6 +614,212 @@ Respond in ${targetLang} language only.`;
     res.status(500).json({ success: false, error: error.message });
   }
 });
+// ==================== RESUME ANALYZER (NO API KEY) ====================
+
+const multer = require("multer");
+const { PDFParse } = require("pdf-parse");
+const mammoth = require("mammoth");
+
+// Multer config
+const upload = multer({
+  storage: multer.memoryStorage(),
+  fileFilter: (req, file, cb) => {
+    const allowed = ["application/pdf", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"];
+    if (allowed.includes(file.mimetype)) cb(null, true);
+    else cb(new Error("Only PDF and DOCX allowed"), false);
+  },
+  limits: { fileSize: 5 * 1024 * 1024 }
+});
+
+// Resume Analysis Schema
+const resumeAnalysisSchema = new mongoose.Schema({
+  user: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
+  fileName: String,
+  extractedText: String,
+  atsScore: Number,
+  missingSkills: [String],
+  grammarCorrections: [String],
+  suggestions: [String],
+  strengths: [String],
+  weaknesses: [String],
+  matchingRoles: [{ role: String, matchPercentage: Number }],
+  createdAt: { type: Date, default: Date.now }
+});
+const ResumeAnalysis = mongoose.model("ResumeAnalysis", resumeAnalysisSchema);
+
+// Authentication middleware (reuse your JWT)
+const authMiddleware = (req, res, next) => {
+  const token = req.headers.authorization?.split(" ")[1];
+  if (!token) return res.status(401).json({ error: "Unauthorized" });
+  try {
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    req.userId = decoded.id;
+    next();
+  } catch {
+    res.status(401).json({ error: "Invalid token" });
+  }
+};
+
+// Text extraction helpers
+const extractPDF = async (buffer) => {
+  const parser = new PDFParse({ data: buffer });
+  try {
+    const data = await parser.getText();
+    return data.text;
+  } finally {
+    await parser.destroy();
+  }
+};
+const extractDOCX = async (buffer) => {
+  const result = await mammoth.extractRawText({ buffer });
+  return result.value;
+};
+const extractText = async (buffer, mimeType) => {
+  if (mimeType === "application/pdf") return extractPDF(buffer);
+  if (mimeType === "application/vnd.openxmlformats-officedocument.wordprocessingml.document") return extractDOCX(buffer);
+  throw new Error("Unsupported file type");
+};
+
+// Local rule‑based analysis (no API key)
+const analyzeResume = (text) => {
+  const t = text.toLowerCase();
+  const allSkills = [
+    "javascript","python","java","c++","react","angular","vue","node.js","express",
+    "mongodb","mysql","postgresql","aws","docker","git","typescript","html","css",
+    "tailwind","php","django","flask","machine learning","ai"
+  ];
+  const found = allSkills.filter(skill => t.includes(skill));
+  const missing = allSkills.filter(s => !t.includes(s)).slice(0, 8);
+
+  const grammar = [];
+  if (t.includes("teh")) grammar.push("'teh' → 'the'");
+  if (t.includes("recieve")) grammar.push("'recieve' → 'receive'");
+  if (t.includes("acheive")) grammar.push("'acheive' → 'achieve'");
+  if (grammar.length === 0) grammar.push("No obvious spelling errors.");
+
+  const suggestions = [];
+  if (text.length < 500) suggestions.push("Add more details about responsibilities.");
+  if (!t.includes("quantifiable") && !t.includes("%")) suggestions.push("Add quantifiable achievements.");
+  if (found.length < 4) suggestions.push("Include more relevant technical skills.");
+  if (!t.includes("linkedin")) suggestions.push("Add LinkedIn profile link.");
+  if (suggestions.length === 0) suggestions.push("Resume looks strong – keep updating!");
+
+  const strengths = [];
+  if (found.length > 2) strengths.push(`Technical skills: ${found.slice(0,3).join(", ")}`);
+  if (text.length > 1000) strengths.push("Detailed work experience.");
+  if (t.includes("lead") || t.includes("managed")) strengths.push("Leadership experience shown.");
+  if (strengths.length === 0) strengths.push("Clear structure.");
+
+  const weaknesses = [];
+  if (text.length < 800) weaknesses.push("Resume too short – add more content.");
+  if (found.length < 3) weaknesses.push("Limited technical skills listed.");
+  if (!t.includes("experience")) weaknesses.push("No clear work experience section.");
+  if (weaknesses.length === 0) weaknesses.push("Could be tailored for specific roles.");
+
+  let atsScore = 50;
+  if (found.length > 0) atsScore += Math.min(found.length * 4, 25);
+  if (text.length > 800) atsScore += 10;
+  if (text.length > 1500) atsScore += 5;
+  if (t.includes("achieved") || t.includes("improved")) atsScore += 5;
+  atsScore = Math.min(atsScore, 100);
+
+  const roles = [];
+  if (found.some(s => ["react","angular","vue"].includes(s))) roles.push({ role: "Frontend Developer", matchPercentage: 75 });
+  if (found.some(s => ["node.js","express"].includes(s))) roles.push({ role: "Backend Developer", matchPercentage: 70 });
+  if (found.includes("mongodb") || found.includes("mysql")) roles.push({ role: "Database Admin", matchPercentage: 65 });
+  if (found.includes("docker") || found.includes("aws")) roles.push({ role: "DevOps Engineer", matchPercentage: 80 });
+  if (found.includes("python") && found.includes("machine learning")) roles.push({ role: "AI/ML Engineer", matchPercentage: 85 });
+  if (roles.length === 0) roles.push({ role: "Junior Developer", matchPercentage: 60 });
+
+  return {
+    atsScore,
+    missingSkills: missing,
+    grammarCorrections: grammar,
+    suggestions,
+    strengths,
+    weaknesses,
+    matchingRoles: roles.slice(0,4)
+  };
+};
+
+// API endpoints
+app.post("/api/resume/analyze", authMiddleware, upload.single("resume"), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: "No file uploaded" });
+    const rawText = await extractText(req.file.buffer, req.file.mimetype);
+    const cleaned = rawText.replace(/\s+/g, " ").trim();
+    if (!cleaned) return res.status(400).json({ error: "Could not extract text from this resume. Please upload a text-based PDF or DOCX file." });
+    const analysis = analyzeResume(cleaned);
+    const analysisWithText = {
+      ...analysis,
+      fileName: req.file.originalname,
+      extractedText: cleaned.substring(0, 2000)
+    };
+    const saved = new ResumeAnalysis({
+      user: req.userId,
+      fileName: req.file.originalname,
+      extractedText: analysisWithText.extractedText,
+      ...analysis
+    });
+    await saved.save();
+    res.json({ analysis: analysisWithText, analysisId: saved._id });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get("/api/resume/history", authMiddleware, async (req, res) => {
+  try {
+    const history = await ResumeAnalysis.find({ user: req.userId }).sort("-createdAt");
+    res.json(history);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get("/api/resume/analysis/:id", authMiddleware, async (req, res) => {
+  try {
+    const analysis = await ResumeAnalysis.findOne({ _id: req.params.id, user: req.userId });
+    if (!analysis) return res.status(404).json({ error: "Not found" });
+    res.json(analysis);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post("/api/resume/improve", authMiddleware, (req, res) => {
+  const { originalText, suggestions } = req.body;
+  if (!originalText) return res.status(400).json({ error: "Missing text" });
+  let improved = originalText;
+  if (suggestions?.length) {
+    improved = `[AI Improvement Placeholder]\n\nBased on suggestions: ${suggestions.join(", ")}\n\nOriginal:\n${originalText}\n\nConsider adding quantifiable achievements and relevant keywords.`;
+  }
+  res.json({ improvedText: improved });
+});
+
+app.post("/api/resume/report", authMiddleware, async (req, res) => {
+  try {
+    const { analysis } = req.body;
+    if (!analysis) return res.status(400).json({ error: "Missing analysis" });
+    const html = `
+      <!DOCTYPE html>
+      <html><head><meta charset="UTF-8"><style>body{font-family:Arial;padding:20px} .score{font-size:48px;color:#4F46E5}</style></head>
+      <body>
+        <h1>Resume Report</h1>
+        <p><strong>File:</strong> ${analysis.fileName}</p>
+        <p><strong>ATS Score:</strong> <span class="score">${analysis.atsScore}/100</span></p>
+        <h2>Missing Skills</h2><ul>${analysis.missingSkills.map(s=>`<li>${s}</li>`).join("")}</ul>
+        <h2>Suggestions</h2><ul>${analysis.suggestions.map(s=>`<li>${s}</li>`).join("")}</ul>
+        <h2>Strengths</h2><ul>${analysis.strengths.map(s=>`<li>${s}</li>`).join("")}</ul>
+        <h2>Weaknesses</h2><ul>${analysis.weaknesses.map(s=>`<li>${s}</li>`).join("")}</ul>
+        <h2>Best Roles</h2><ul>${analysis.matchingRoles.map(r=>`<li>${r.role} – ${r.matchPercentage}%</li>`).join("")}</ul>
+      </body></html>`;
+    res.json({ html });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 // ==========================
 // 🚀 SERVER START
 // ==========================
