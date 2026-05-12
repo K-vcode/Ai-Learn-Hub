@@ -634,7 +634,7 @@ Respond in ${targetLang} language only.`;
 // ==================== RESUME ANALYZER (NO API KEY) ====================
 
 const multer = require("multer");
-const pdfParse = require("pdf-parse");
+const pdfParse = require("pdf-parse").default || require("pdf-parse");
 const mammoth = require("mammoth");
 
 // Multer config
