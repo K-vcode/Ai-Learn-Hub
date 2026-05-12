@@ -19,6 +19,8 @@ const allowedOrigins = new Set([
   "http://127.0.0.1:3000",
   "http://192.168.1.105:3000",
   "http://192.168.1.105:5000",
+  "http://10.76.134.9:3000",
+  "http://10.76.134.9:5000",
   "https://localhost",
   "http://localhost",
   "capacitor://localhost",
