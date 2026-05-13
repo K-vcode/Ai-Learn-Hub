@@ -79,6 +79,32 @@ const QuizAttemptSchema = new mongoose.Schema({
 });
 const QuizAttempt = mongoose.model("QuizAttempt", QuizAttemptSchema);
 
+const chatHistorySchema = new mongoose.Schema({
+  user: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+  question: String,
+  answer: String,
+  language: String,
+  hasImage: { type: Boolean, default: false },
+  createdAt: { type: Date, default: Date.now }
+});
+chatHistorySchema.index({ user: 1, createdAt: -1 });
+const ChatHistory = mongoose.model("ChatHistory", chatHistorySchema);
+
+// ==========================
+// 🔐 AUTHENTICATION MIDDLEWARE
+// ==========================
+const authMiddleware = (req, res, next) => {
+  const token = req.headers.authorization?.startsWith("Bearer ") ? req.headers.authorization.split(" ")[1] : null;
+  if (!token) return res.status(401).json({ success: false, error: "Unauthorized" });
+  try {
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    req.userId = decoded.id;
+    next();
+  } catch {
+    res.status(401).json({ success: false, error: "Invalid token" });
+  }
+};
+
 // ==========================
 // ðŸ” SIGNUP API
 // ==========================
@@ -270,6 +296,59 @@ app.delete("/api/clear-quiz-history", async (req, res) => {
     await QuizAttempt.deleteMany({ userId: decoded.id });
     res.json({ success: true, message: "History cleared" });
   } catch (error) { res.status(500).json({ success: false, error: error.message }); }
+});
+
+app.post('/api/chat/save', authMiddleware, async (req, res) => {
+  try {
+    const { question, answer, language, hasImage } = req.body;
+    if (!question || !answer) return res.status(400).json({ success: false, error: 'Missing chat data' });
+    const chatEntry = new ChatHistory({
+      user: req.userId,
+      question,
+      answer,
+      language: language || 'en',
+      hasImage: Boolean(hasImage)
+    });
+    await chatEntry.save();
+    res.json({ success: true, chat: chatEntry });
+  } catch (error) {
+    console.error('Chat save error:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.get('/api/chat/history', authMiddleware, async (req, res) => {
+  try {
+    const history = await ChatHistory.find({ user: req.userId }).sort({ createdAt: -1 }).limit(50);
+    res.json(history);
+  } catch (error) {
+    console.error('Chat history fetch error:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.delete('/api/chat/history', authMiddleware, async (req, res) => {
+  try {
+    await ChatHistory.deleteMany({ user: req.userId });
+    res.json({ success: true, message: 'Chat history cleared' });
+  } catch (error) {
+    console.error('Chat history clear error:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.delete('/api/chat/history/:id', authMiddleware, async (req, res) => {
+  try {
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+      return res.status(400).json({ success: false, error: 'Invalid chat item id' });
+    }
+    const deleted = await ChatHistory.findOneAndDelete({ _id: req.params.id, user: req.userId });
+    if (!deleted) return res.status(404).json({ success: false, error: 'Chat item not found' });
+    res.json({ success: true, message: 'Chat item deleted' });
+  } catch (error) {
+    console.error('Chat delete error:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
 });
 
 // ==========================
@@ -669,23 +748,10 @@ const resumeAnalysisSchema = new mongoose.Schema({
 });
 const ResumeAnalysis = mongoose.model("ResumeAnalysis", resumeAnalysisSchema);
 
-// Authentication middleware (reuse your JWT)
-const authMiddleware = (req, res, next) => {
-  const token = req.headers.authorization?.startsWith("Bearer ") ? req.headers.authorization.split(" ")[1] : null;
-  if (!token) return res.status(401).json({ success: false, error: "Unauthorized" });
-  try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    req.userId = decoded.id;
-    next();
-  } catch {
-    res.status(401).json({ success: false, error: "Invalid token" });
-  }
-};
-
 // Text extraction helpers
 const extractPDF = async (buffer) => {
   const data = await pdfParse(buffer);
-  return data.text || "";
+  return data?.text || "";
 };
 const extractDOCX = async (buffer) => {
   const result = await mammoth.extractRawText({ buffer });
