@@ -14,6 +14,7 @@ const path = require('path');
 const os = require('os');
 const app = express();
 
+
 const allowedOrigins = new Set([
   "http://localhost:3000",
   "http://127.0.0.1:3000",
@@ -46,14 +47,14 @@ app.options(/.*/, cors());
 app.use(express.json({ limit: '10mb' }));
 
 // ==========================
-// âœ… MONGODB CONNECTION
+//  MONGODB CONNECTION
 // ==========================
 mongoose.connect(process.env.MONGO_URI)
 .then(() => console.log("âœ… MongoDB Connected"))
 .catch(err => console.log("âŒ MongoDB Error:", err));
 
 // ==========================
-// âœ… USER SCHEMA
+//  USER SCHEMA
 // ==========================
 const UserSchema = new mongoose.Schema({
   fullname: String,
@@ -64,7 +65,7 @@ const UserSchema = new mongoose.Schema({
 const User = mongoose.model("User", UserSchema);
 
 // ==========================
-// ðŸ“Š SCOREBOARD SCHEMA
+//  SCOREBOARD SCHEMA
 // ==========================
 const QuizAttemptSchema = new mongoose.Schema({
   userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
@@ -917,6 +918,162 @@ app.post("/api/resume/report", authMiddleware, async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
+
+// ========== ROADMAP FEATURE ==========
+
+// ========== AUTHENTICATION MIDDLEWARE ==========
+const auth = async (req, res, next) => {
+  try {
+    const token = req.header('Authorization')?.replace('Bearer ', '');
+    if (!token) {
+      return res.status(401).json({ error: 'Access denied. No token provided.' });
+    }
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    req.user = { id: decoded.id }; // Adjust if your token uses a different field (e.g., userId)
+    next();
+  } catch (err) {
+    res.status(403).json({ error: 'Invalid or expired token.' });
+  }
+};
+
+
+
+
+
+// Roadmap Progress Model
+const roadmapProgressSchema = new mongoose.Schema({
+  userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+  courseName: { type: String, required: true },
+  completedSteps: [{ type: Number, default: [] }],
+  progressPercentage: { type: Number, default: 0 },
+  updatedAt: { type: Date, default: Date.now }
+});
+const RoadmapProgress = mongoose.model('RoadmapProgress', roadmapProgressSchema);
+
+// Predefined roadmaps
+const ROADMAPS = {
+  "MERN Stack": {
+    steps: [
+      { title: "JavaScript Essentials", topics: ["Variables", "Functions", "ES6+", "DOM"] },
+      { title: "React.js", topics: ["Components", "Props", "State", "Hooks", "Router"] },
+      { title: "Node.js & Express", topics: ["REST APIs", "Middleware", "Routing"] },
+      { title: "MongoDB", topics: ["CRUD", "Aggregation", "Indexes"] },
+      { title: "Full Stack Project", topics: ["Authentication", "Deployment"] }
+    ]
+  },
+  "Frontend Developer": {
+    steps: [
+      { title: "HTML & CSS", topics: ["Semantic HTML", "Flexbox", "Grid"] },
+      { title: "JavaScript", topics: ["ES6", "Async/Await", "DOM"] },
+      { title: "React", topics: ["Components", "Hooks", "State Management"] },
+      { title: "Tailwind CSS", topics: ["Utility Classes", "Responsive"] },
+      { title: "Portfolio Project", topics: ["Deployment", "Performance"] }
+    ]
+  },
+  "Python": {
+    steps: [
+      { title: "Python Basics", topics: ["Syntax", "Data Types", "Loops"] },
+      { title: "OOP in Python", topics: ["Classes", "Inheritance", "Polymorphism"] },
+      { title: "Data Science Libraries", topics: ["NumPy", "Pandas", "Matplotlib"] },
+      { title: "Flask/Django", topics: ["Web Development", "APIs"] },
+      { title: "Capstone Project", topics: ["Machine Learning Model"] }
+    ]
+  },
+  "AI Engineer": {
+    steps: [
+      { title: "Python & Math", topics: ["Linear Algebra", "Calculus", "NumPy"] },
+      { title: "Machine Learning", topics: ["Regression", "Classification", "Scikit-learn"] },
+      { title: "Deep Learning", topics: ["Neural Networks", "TensorFlow/PyTorch"] },
+      { title: "NLP & Computer Vision", topics: ["Transformers", "CNNs"] },
+      { title: "MLOps & Deployment", topics: ["Docker", "FastAPI", "Cloud"] }
+    ]
+  },
+  "Cyber Security": {
+    steps: [
+      { title: "Networking Basics", topics: ["OSI Model", "TCP/IP", "Subnetting"] },
+      { title: "Security Fundamentals", topics: ["CIA Triad", "Cryptography", "Authentication"] },
+      { title: "Ethical Hacking", topics: ["Kali Linux", "Metasploit", "Nmap"] },
+      { title: "Web Security", topics: ["OWASP Top 10", "SQL Injection", "XSS"] },
+      { title: "Security Operations", topics: ["SIEM", "Incident Response", "Compliance"] }
+    ]
+  },
+   "Embedded Systems": {
+    steps: [
+      { title: "C Programming & Microcontrollers", topics: ["C syntax", "Pointers", "Memory management", "8051/AVR basics"] },
+      { title: "Digital Electronics & Interfacing", topics: ["GPIO", "Timers", "Interrupts", "ADC/DAC"] },
+      { title: "Real-Time Operating Systems (RTOS)", topics: ["Tasks", "Semaphores", "Queues", "FreeRTOS"] },
+      { title: "ARM Cortex & Embedded Linux", topics: ["ARM architecture", "Device drivers", "Yocto/Buildroot"] },
+      { title: "IoT & Communication Protocols", topics: ["UART", "I2C", "SPI", "CAN", "MQTT"] }
+    ]
+  },
+  "Machine Learning": {
+    steps: [
+      { title: "Python for Data Science", topics: ["NumPy", "Pandas", "Matplotlib"] },
+      { title: "Mathematics for ML", topics: ["Linear Algebra", "Calculus", "Probability", "Statistics"] },
+      { title: "Supervised Learning", topics: ["Regression", "Classification", "Decision Trees", "SVM"] },
+      { title: "Unsupervised & Advanced ML", topics: ["Clustering", "PCA", "Ensemble Methods"] },
+      { title: "Model Deployment & MLOps", topics: ["Flask/FastAPI", "Docker", "CI/CD for ML"] }
+    ]
+  },
+  "UI/UX Design": {
+    steps: [
+      { title: "Design Fundamentals", topics: ["Color theory", "Typography", "Grid systems", "Gestalt principles"] },
+      { title: "User Research & Wireframing", topics: ["Personas", "User journeys", "Low-fidelity wireframes"] },
+      { title: "Prototyping with Figma", topics: ["Components", "Auto layout", "Interactive prototypes"] },
+      { title: "Usability Testing & Iteration", topics: ["A/B testing", "Heatmaps", "Usability metrics"] },
+      { title: "Design Systems & Handoff", topics: ["Design tokens", "Storybook", "Developer handoff"] }
+    ]
+  }
+
+};
+
+// Roadmap Routes (place after your existing auth middleware)
+app.post('/api/roadmap/search', auth, async (req, res) => {
+  const { query } = req.body;
+  const normalized = query.trim();
+  const roadmap = ROADMAPS[normalized];
+  if (!roadmap) {
+    return res.status(404).json({ error: 'Roadmap not found' });
+  }
+  let progress = await RoadmapProgress.findOne({ userId: req.user.id, courseName: normalized });
+  if (!progress) {
+    progress = new RoadmapProgress({ userId: req.user.id, courseName: normalized, completedSteps: [] });
+    await progress.save();
+  }
+  res.json({
+    courseName: normalized,
+    steps: roadmap.steps,
+    completedSteps: progress.completedSteps,
+    progressPercentage: progress.progressPercentage,
+  });
+});
+
+app.post('/api/roadmap/complete-step', auth, async (req, res) => {
+  const { courseName, stepIndex } = req.body;
+  const userId = req.user.id;
+  let progress = await RoadmapProgress.findOne({ userId, courseName });
+  if (!progress) {
+    progress = new RoadmapProgress({ userId, courseName, completedSteps: [] });
+  }
+  if (!progress.completedSteps.includes(stepIndex)) {
+    progress.completedSteps.push(stepIndex);
+    const totalSteps = ROADMAPS[courseName]?.steps.length || 5;
+    progress.progressPercentage = Math.round((progress.completedSteps.length / totalSteps) * 100);
+    await progress.save();
+  }
+  res.json({ success: true, completedSteps: progress.completedSteps, progressPercentage: progress.progressPercentage });
+});
+
+app.get('/api/roadmap/progress/:courseName', auth, async (req, res) => {
+  const { courseName } = req.params;
+  const progress = await RoadmapProgress.findOne({ userId: req.user.id, courseName });
+  res.json({
+    completedSteps: progress?.completedSteps || [],
+    progressPercentage: progress?.progressPercentage || 0,
+  });
+});
+// ========== END ROADMAP FEATURE ==========
 // ==========================
 // ðŸš€ SERVER START
 // ==========================
