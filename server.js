@@ -14,6 +14,58 @@ const path = require('path');
 const os = require('os');
 const app = express();
 
+const languageMap = { en: "English", ta: "Tamil", hi: "Hindi" };
+
+const getTargetLanguage = (language) => languageMap[language] || "English";
+
+const getNumberedOcrLines = (text) => text
+  .split(/\r?\n/)
+  .map((line) => line.replace(/\s+/g, " ").trim())
+  .filter(Boolean)
+  .map((line, index) => `${index + 1}. ${line}`)
+  .join("\n");
+
+const buildImageContentPrompt = ({ extractedText, userPrompt, language }) => {
+  const targetLang = getTargetLanguage(language);
+  const numberedLines = getNumberedOcrLines(extractedText);
+  const answerStructure = language === "ta"
+    ? `பதில் அமைப்பு:
+1. படத்தில் இருந்து படிக்கப்பட்ட வரி அல்லது உரை
+2. அந்த உரை எந்த விஷயத்தைப் பற்றி சொல்கிறது
+3. எளிய தமிழில் தெளிவான விளக்கம்
+4. பயனர் கேட்ட கேள்விக்கான நேரடி பதில்`
+    : `Return the answer in this structure:
+1. Extracted text
+2. What this content is about
+3. Clear detailed explanation
+4. Direct answer to the user's request, if any`;
+  const questionLine = userPrompt
+    ? `User question/request: ${userPrompt}`
+    : "User request: Explain the visible text and its meaning clearly.";
+
+  return {
+    system: `You are an OCR-based study assistant. Work only from the OCR text provided by the backend.
+Do not give generic image descriptions such as "this is a white paper with text".
+First understand the actual topic, then explain the content clearly.
+If the OCR text contains notes, questions, diagrams, formulas, equations, lists, or handwritten content, identify the content type and explain the real meaning.
+The OCR text is also provided as numbered lines. If the user asks for a specific line, such as "4th line", identify that exact numbered line first and explain only that line unless the surrounding context is needed.
+If any OCR text looks misspelled or broken, infer the most likely intended meaning carefully, but do not invent content that is not supported by the OCR.
+Respond in ${targetLang}.
+If responding in Tamil, use simple, natural Tamil sentences suitable for text-to-speech. Avoid unnecessary English headings, markdown symbols, and long complex sentences.`,
+    user: `OCR text extracted from the image:
+
+${extractedText}
+
+Numbered OCR lines:
+
+${numberedLines || "No separate lines detected."}
+
+${questionLine}
+
+${answerStructure}`
+  };
+};
+
 
 const allowedOrigins = new Set([
   "http://localhost:3000",
@@ -401,7 +453,8 @@ app.get("/api/health", (req, res) => {
   res.json({
     success: true,
     groqConfigured: Boolean(process.env.GROQ_API_KEY),
-    mongoConfigured: Boolean(process.env.MONGO_URI)
+    mongoConfigured: Boolean(process.env.MONGO_URI),
+    resumePdfParser: getPdfParserMode()
   });
 });
 
@@ -434,18 +487,20 @@ app.post("/api/local-image-ai", async (req, res) => {
       formData.append('language', 'eng');
       formData.append('isOverlayRequired', 'false');
       formData.append('OCREngine', '2');
+      formData.append('scale', 'true');
+      formData.append('detectOrientation', 'true');
 
       const ocrResponse = await axios.post('https://api.ocr.space/parse/image', formData, {
         headers: { ...formData.getHeaders() },
-        timeout: 15000
+        timeout: 30000
       });
       extractedText = ocrResponse.data?.ParsedResults?.[0]?.ParsedText || "";
       extractedText = extractedText.trim();
-      if (extractedText && extractedText !== "No text found" && extractedText.length > 10) {
+      if (extractedText && extractedText !== "No text found" && extractedText.length > 2) {
         ocrSuccess = true;
         console.log("âœ… OCR succeeded. Extracted text length:", extractedText.length);
       } else {
-        console.log("âš ï¸ OCR found little or no text. Will fallback to vision.");
+        console.log("âš ï¸ OCR found little or no readable text.");
       }
     } catch (ocrErr) {
       console.log("OCR service error:", ocrErr.message);
@@ -454,31 +509,40 @@ app.post("/api/local-image-ai", async (req, res) => {
     // 2. If OCR found meaningful text â†’ explain the text content (like a teacher)
     if (ocrSuccess) {
       console.log("ðŸ“– Explaining extracted text content (no visual description)");
-      const languageMap = { en: "English", ta: "Tamil", hi: "Hindi" };
-      const targetLang = languageMap[language] || "English";
-      const systemMsg = `You are an expert teacher. Explain the following text in a very detailed, simple, and easy-to-understand way. Provide the original meaning, context, and a full explanation. Do NOT describe the image itself â€“ only explain the written content. Respond in ${targetLang}.`;
-      const userMsg = `Text from image:\n\n${extractedText}\n\nPlease explain this clearly and completely.`;
+      const userPrompt = (prompt || "").trim();
+      const contentPrompt = buildImageContentPrompt({ extractedText, userPrompt, language });
 
       const groqResponse = await groq.chat.completions.create({
         model: "llama-3.1-8b-instant",
         messages: [
-          { role: "system", content: systemMsg },
-          { role: "user", content: userMsg }
+          { role: "system", content: contentPrompt.system },
+          { role: "user", content: contentPrompt.user }
         ],
         temperature: 0.7,
-        max_tokens: 2000
+        max_tokens: 2500
       });
       const explanation = groqResponse.choices[0].message.content;
       return res.json({
         success: true,
-        aiAnalysis: `ðŸ“– **Content Explanation**\n\n${explanation}`,
+        aiAnalysis: `**Extracted OCR Text**\n\n${extractedText}\n\n**Explanation**\n\n${explanation}`,
         extractedText: extractedText,
         mode: "ocr_explanation"
       });
     }
 
-    // 3. No text found â†’ fallback to vision model (visual description)
-    console.log("ðŸ–¼ï¸ No text detected. Using vision model for visual description.");
+    // 3. No readable text found. Avoid generic captions for study/OCR workflows.
+    console.log("No readable OCR text detected. Returning OCR-focused message.");
+    const noTextMessage = "I could not extract readable text from this image. Please upload a clearer, closer image with good lighting, or crop the image around the notes/questions so I can read and explain the actual content.";
+    return res.status(200).json({
+      success: true,
+      aiAnalysis: `**OCR Result**\n\n${noTextMessage}`,
+      extractedText: "",
+      mode: "ocr_no_text"
+    });
+
+    /*
+    // Vision captions are intentionally disabled here because they produce generic
+    // responses like "white paper with text" instead of explaining readable content.
     await loadImageModel();
     if (!imageModel) {
       return res.status(200).json({
@@ -523,6 +587,7 @@ app.post("/api/local-image-ai", async (req, res) => {
       // No text and no prompt â€“ just return short caption
       return res.json({ success: true, aiAnalysis: `ðŸ“· **Image Analysis**\n\n${shortCaption}` });
     }
+    */
 
   } catch (error) {
     console.error("âŒ Image analysis error:", error);
@@ -641,13 +706,15 @@ app.post("/api/ask-about-image", async (req, res) => {
       formData.append('language', 'eng');
       formData.append('isOverlayRequired', 'false');
       formData.append('OCREngine', '2');
+      formData.append('scale', 'true');
+      formData.append('detectOrientation', 'true');
       const ocrResponse = await axios.post('https://api.ocr.space/parse/image', formData, {
         headers: { ...formData.getHeaders() },
-        timeout: 15000
+        timeout: 30000
       });
       extractedText = ocrResponse.data?.ParsedResults?.[0]?.ParsedText || "";
       extractedText = extractedText.trim();
-      if (extractedText && extractedText !== "No text found" && extractedText.length > 10) {
+      if (extractedText && extractedText !== "No text found" && extractedText.length > 2) {
         ocrSuccess = true;
         console.log("âœ… OCR extracted text length:", extractedText.length);
       }
@@ -655,56 +722,30 @@ app.post("/api/ask-about-image", async (req, res) => {
       console.log("OCR error:", err.message);
     }
 
-    // ---- Step 2: If no text, try vision model (only as last resort) ----
-    let imageDescription = "";
     if (!ocrSuccess) {
-      try {
-        await loadImageModel();
-        if (!imageModel) throw new Error("Vision model is not available");
-        const tempDir = os.tmpdir();
-        const tempFilePath = path.join(tempDir, `ask_img_${Date.now()}.jpg`);
-        fs.writeFileSync(tempFilePath, Buffer.from(base64String, 'base64'));
-        const visionResult = await imageModel(tempFilePath);
-        imageDescription = visionResult[0].generated_text;
-        fs.unlinkSync(tempFilePath);
-        console.log("ðŸ“· Vision description:", imageDescription);
-      } catch (err) {
-        console.log("Vision error:", err.message);
-      }
+      return res.json({
+        success: true,
+        answer: "I could not extract readable text from this image. Please upload a clearer, closer image or crop the image around the notes/questions, then ask again.",
+        hasText: false,
+        extractedText: ""
+      });
     }
 
-    // ---- Step 3: Build context for AI ----
-    let context = "";
-    if (ocrSuccess && extractedText.length > 0) {
-      context = `The user uploaded an image containing this text:\n\n${extractedText}\n\n`;
-    } else if (imageDescription) {
-      context = `The user uploaded an image that appears to show: ${imageDescription}. `;
-      context += `Do NOT describe the image visually. Focus only on any text or meaningful content. If no text, say "I could not find any readable text in this image."\n\n`;
-    } else {
-      context = `The user uploaded an image but no text could be extracted and the vision model is not available. `;
-      context += `Politely inform the user that you cannot read the image content.\n\n`;
-    }
-
-    // ---- Step 4: Let Groq answer the question based on the content ----
-    const languageMap = { en: "English", ta: "Tamil", hi: "Hindi" };
-    const targetLang = languageMap[language] || "English";
-    const systemMessage = `You are a smart assistant that answers questions based on the content of an image. 
-You have received the following context from the image:
-${context}
-Now the user asks: "${question}"
-Answer the question accurately and helpfully, using only the information from the context. 
-If the context does not contain the answer, say "I couldn't find that information in the image."
-Respond in ${targetLang} language only.`;
+    // ---- Step 2: Let Groq answer the question based on the OCR text ----
+    const contentPrompt = buildImageContentPrompt({ extractedText, userPrompt: question, language });
 
     const groqResponse = await groq.chat.completions.create({
       model: "llama-3.1-8b-instant",
-      messages: [{ role: "user", content: systemMessage }],
+      messages: [
+        { role: "system", content: contentPrompt.system },
+        { role: "user", content: contentPrompt.user }
+      ],
       temperature: 0.7,
-      max_tokens: 1000
+      max_tokens: 1500
     });
 
     const answer = groqResponse.choices[0].message.content;
-    res.json({ success: true, answer, hasText: ocrSuccess });
+    res.json({ success: true, answer, hasText: true, extractedText });
 
   } catch (error) {
     console.error("âŒ Ask about image error:", error);
@@ -714,8 +755,15 @@ Respond in ${targetLang} language only.`;
 // ==================== RESUME ANALYZER (NO API KEY) ====================
 
 const multer = require("multer");
-const pdfParse = require("pdf-parse").default || require("pdf-parse");
+const pdfParseModule = require("pdf-parse");
 const mammoth = require("mammoth");
+
+const getPdfParserMode = () => {
+  if (typeof pdfParseModule === "function") return "legacy-function";
+  if (typeof pdfParseModule?.default === "function") return "default-function";
+  if (typeof pdfParseModule?.PDFParse === "function") return "PDFParse-class";
+  return "unavailable";
+};
 
 // Multer config
 const upload = multer({
@@ -740,6 +788,9 @@ const resumeAnalysisSchema = new mongoose.Schema({
   extractedText: String,
   atsScore: Number,
   missingSkills: [String],
+  skillsFound: [String],
+  education: [String],
+  experience: [String],
   grammarCorrections: [String],
   suggestions: [String],
   strengths: [String],
@@ -751,8 +802,32 @@ const ResumeAnalysis = mongoose.model("ResumeAnalysis", resumeAnalysisSchema);
 
 // Text extraction helpers
 const extractPDF = async (buffer) => {
-  const data = await pdfParse(buffer);
-  return data?.text || "";
+  try {
+    if (typeof pdfParseModule === "function") {
+      const data = await pdfParseModule(buffer);
+      return data?.text || "";
+    }
+
+    if (typeof pdfParseModule?.default === "function") {
+      const data = await pdfParseModule.default(buffer);
+      return data?.text || "";
+    }
+
+    if (typeof pdfParseModule?.PDFParse === "function") {
+      const parser = new pdfParseModule.PDFParse({ data: buffer });
+      try {
+        const data = await parser.getText();
+        return data?.text || "";
+      } finally {
+        await parser.destroy();
+      }
+    }
+
+    throw new Error("No compatible PDF parser was found.");
+  } catch (error) {
+    const message = error?.message || "Unknown PDF parser error";
+    throw new Error(`PDF text extraction failed: ${message}. If this is a scanned/image-only PDF, convert it to a text-based PDF or DOCX and try again.`);
+  }
 };
 const extractDOCX = async (buffer) => {
   const result = await mammoth.extractRawText({ buffer });
@@ -765,16 +840,45 @@ const extractText = async (buffer, mimeType, fileName = "") => {
   throw new Error("Unsupported file type");
 };
 
-// Local ruleâ€‘based analysis (no API key)
+const normalizeResumeText = (text) => text
+  .replace(/\r/g, "\n")
+  .replace(/[ \t]+/g, " ")
+  .replace(/\n{3,}/g, "\n\n")
+  .trim();
+
+const findMatchingTerms = (text, terms) => {
+  const t = text.toLowerCase();
+  return terms.filter((term) => {
+    const escaped = term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    return new RegExp(`(^|[^a-z0-9+#.])${escaped}([^a-z0-9+#.]|$)`, "i").test(t);
+  });
+};
+
+const pickSectionLines = (text, sectionWords, maxLines = 5) => {
+  const lines = text.split(/\n+/).map((line) => line.trim()).filter(Boolean);
+  const sectionIndex = lines.findIndex((line) => sectionWords.some((word) => line.toLowerCase().includes(word)));
+  if (sectionIndex === -1) return [];
+  return lines.slice(sectionIndex, sectionIndex + maxLines);
+};
+
+// Local rule-based analysis (no API key)
 const analyzeResume = (text) => {
   const t = text.toLowerCase();
   const allSkills = [
-    "javascript","python","java","c++","react","angular","vue","node.js","express",
-    "mongodb","mysql","postgresql","aws","docker","git","typescript","html","css",
-    "tailwind","php","django","flask","machine learning","ai"
+    "javascript","typescript","python","java","c++","c#","react","angular","vue","node.js","express",
+    "mongodb","mysql","postgresql","sql","aws","azure","docker","kubernetes","git","github",
+    "html","css","tailwind","bootstrap","php","django","flask","spring","rest api","graphql",
+    "machine learning","deep learning","ai","tensorflow","pytorch","pandas","numpy","power bi",
+    "excel","figma","ui/ux","linux","firebase","android","data analysis"
   ];
-  const found = allSkills.filter(skill => t.includes(skill));
+  const found = findMatchingTerms(text, allSkills);
   const missing = allSkills.filter(s => !t.includes(s)).slice(0, 8);
+  const education = pickSectionLines(text, ["education", "degree", "university", "college", "bachelor", "master", "b.tech", "b.e"]);
+  const experience = pickSectionLines(text, ["experience", "internship", "employment", "work history", "projects"], 8);
+  const hasEducation = education.length > 0 || /(b\.?tech|bachelor|master|m\.?tech|degree|university|college|cgpa|gpa)/i.test(text);
+  const hasExperience = experience.length > 0 || /(experience|intern|developer|engineer|worked|built|managed|led|created|developed)/i.test(text);
+  const hasMetrics = /(\d+%|\d+\+|\d+\s*(users|clients|projects|months|years|members|students|requests|records|hours))/i.test(text);
+  const hasContact = /(\S+@\S+\.\S+|\+?\d[\d\s-]{8,})/.test(text);
 
   const grammar = [];
   if (t.includes("teh")) grammar.push("'teh' â†’ 'the'");
@@ -784,41 +888,56 @@ const analyzeResume = (text) => {
 
   const suggestions = [];
   if (text.length < 500) suggestions.push("Add more details about responsibilities.");
-  if (!t.includes("quantifiable") && !t.includes("%")) suggestions.push("Add quantifiable achievements.");
-  if (found.length < 4) suggestions.push("Include more relevant technical skills.");
+  if (!hasMetrics) suggestions.push("Add measurable achievements with numbers, percentages, users, project counts, or performance impact.");
+  if (found.length < 5) suggestions.push("Include more role-specific technical skills in a dedicated Skills section.");
+  if (!hasEducation) suggestions.push("Add a clear Education section with degree, institution, year, and CGPA/GPA if useful.");
+  if (!hasExperience) suggestions.push("Add internship, project, or work experience with action verbs and outcomes.");
+  if (!hasContact) suggestions.push("Add clear contact details such as email and phone number.");
   if (!t.includes("linkedin")) suggestions.push("Add LinkedIn profile link.");
-  if (suggestions.length === 0) suggestions.push("Resume looks strong â€“ keep updating!");
+  if (suggestions.length === 0) suggestions.push("Resume looks strong. Keep tailoring keywords for each job description.");
 
   const strengths = [];
-  if (found.length > 2) strengths.push(`Technical skills: ${found.slice(0,3).join(", ")}`);
-  if (text.length > 1000) strengths.push("Detailed work experience.");
+  if (found.length > 2) strengths.push(`Technical skills found: ${found.slice(0,8).join(", ")}`);
+  if (hasEducation) strengths.push("Education details are present.");
+  if (hasExperience) strengths.push("Experience/projects section is present.");
+  if (hasMetrics) strengths.push("Resume includes measurable achievements.");
+  if (text.length > 1000) strengths.push("Resume has enough detail for ATS parsing.");
   if (t.includes("lead") || t.includes("managed")) strengths.push("Leadership experience shown.");
   if (strengths.length === 0) strengths.push("Clear structure.");
 
   const weaknesses = [];
-  if (text.length < 800) weaknesses.push("Resume too short â€“ add more content.");
+  if (text.length < 800) weaknesses.push("Resume is short. Add stronger project, responsibility, and achievement details.");
   if (found.length < 3) weaknesses.push("Limited technical skills listed.");
-  if (!t.includes("experience")) weaknesses.push("No clear work experience section.");
+  if (!hasEducation) weaknesses.push("No clear education section detected.");
+  if (!hasExperience) weaknesses.push("No clear work/project experience section detected.");
+  if (!hasMetrics) weaknesses.push("Few measurable results or impact statements detected.");
   if (weaknesses.length === 0) weaknesses.push("Could be tailored for specific roles.");
 
-  let atsScore = 50;
-  if (found.length > 0) atsScore += Math.min(found.length * 4, 25);
+  let atsScore = 35;
+  atsScore += Math.min(found.length * 4, 28);
   if (text.length > 800) atsScore += 10;
-  if (text.length > 1500) atsScore += 5;
-  if (t.includes("achieved") || t.includes("improved")) atsScore += 5;
+  if (text.length > 1500) atsScore += 7;
+  if (hasEducation) atsScore += 8;
+  if (hasExperience) atsScore += 8;
+  if (hasMetrics) atsScore += 7;
+  if (hasContact) atsScore += 5;
   atsScore = Math.min(atsScore, 100);
 
   const roles = [];
   if (found.some(s => ["react","angular","vue"].includes(s))) roles.push({ role: "Frontend Developer", matchPercentage: 75 });
   if (found.some(s => ["node.js","express"].includes(s))) roles.push({ role: "Backend Developer", matchPercentage: 70 });
-  if (found.includes("mongodb") || found.includes("mysql")) roles.push({ role: "Database Admin", matchPercentage: 65 });
-  if (found.includes("docker") || found.includes("aws")) roles.push({ role: "DevOps Engineer", matchPercentage: 80 });
-  if (found.includes("python") && found.includes("machine learning")) roles.push({ role: "AI/ML Engineer", matchPercentage: 85 });
-  if (roles.length === 0) roles.push({ role: "Junior Developer", matchPercentage: 60 });
+  if (found.some(s => ["mongodb","mysql","postgresql","sql"].includes(s))) roles.push({ role: "Database / SQL Developer", matchPercentage: 68 });
+  if (found.some(s => ["docker","kubernetes","aws","azure"].includes(s))) roles.push({ role: "DevOps / Cloud Engineer", matchPercentage: 80 });
+  if (found.includes("python") && found.some(s => ["machine learning","deep learning","ai","tensorflow","pytorch","pandas","numpy"].includes(s))) roles.push({ role: "AI/ML Engineer", matchPercentage: 85 });
+  if (found.some(s => ["figma","ui/ux"].includes(s))) roles.push({ role: "UI/UX Designer", matchPercentage: 72 });
+  if (roles.length === 0) roles.push({ role: hasExperience ? "Software Developer" : "Junior Developer / Intern", matchPercentage: 60 });
 
   return {
     atsScore,
     missingSkills: missing,
+    skillsFound: found,
+    education,
+    experience,
     grammarCorrections: grammar,
     suggestions,
     strengths,
@@ -838,7 +957,7 @@ app.post("/api/resume/analyze", authMiddleware, (req, res) => {
       if (!req.file) return res.status(400).json({ success: false, error: "No file uploaded" });
 
       const rawText = await extractText(req.file.buffer, req.file.mimetype, req.file.originalname);
-      const cleaned = rawText.replace(/\s+/g, " ").trim();
+      const cleaned = normalizeResumeText(rawText);
       if (!cleaned) {
         return res.status(400).json({
           success: false,
@@ -850,7 +969,7 @@ app.post("/api/resume/analyze", authMiddleware, (req, res) => {
       const analysisWithText = {
         ...analysis,
         fileName: req.file.originalname,
-        extractedText: cleaned.substring(0, 2000)
+        extractedText: cleaned.substring(0, 5000)
       };
       const saved = new ResumeAnalysis({
         user: req.userId,
@@ -1074,6 +1193,89 @@ app.get('/api/roadmap/progress/:courseName', auth, async (req, res) => {
   });
 });
 // ========== END ROADMAP FEATURE ==========
+
+const courses = [
+
+  {
+    title: "MERN Stack",
+    videos: 45,
+    description: "Learn MongoDB, Express, React and Node",
+    image:
+      "https://img.icons8.com/color/480/mongodb.png",
+    videoUrl: "https://www.youtube.com/watch?v=7CqJlxBYj-M"
+  },
+
+  {
+    title: "Frontend Developer",
+    videos: 30,
+    description: "HTML CSS JavaScript React",
+    image:
+      "https://img.icons8.com/color/480/react-native.png",
+    videoUrl: "https://www.youtube.com/watch?v=zJSY8tbf_ys"
+  },
+
+  {
+    title: "Python",
+    videos: 50,
+    description: "Python Full Course",
+    image:
+      "https://img.icons8.com/color/480/python.png",
+    videoUrl: "https://www.youtube.com/watch?v=_uQrJ0TkZlc"
+  },
+
+  {
+    title: "Machine Learning",
+    videos: 40,
+    description: "AI and ML Course",
+    image:
+      "https://img.icons8.com/color/480/artificial-intelligence.png",
+    videoUrl: "https://www.youtube.com/watch?v=GwIo3gDZCVQ"
+  },
+
+  {
+    title: "Cyber Security",
+    videos: 35,
+    description: "Learn Ethical Hacking",
+    image:
+      "https://img.icons8.com/color/480/hacker.png",
+    videoUrl: "https://www.youtube.com/watch?v=inWWhr5tnEA"
+  },
+
+  {
+    title: "UI UX Design",
+    videos: 20,
+    description: "Figma UI UX Complete Course",
+    image:
+      "https://img.icons8.com/color/480/figma--v1.png",
+    videoUrl: "https://www.youtube.com/watch?v=c9Wg6Cb_YlU"
+  },
+
+  {
+    title: "AutoCAD",
+    videos: 18,
+    description: "Engineering Drawing Course",
+    image:
+      "https://img.icons8.com/color/480/autodesk.png",
+    videoUrl: "https://www.youtube.com/watch?v=VtLXKU1PpRU"
+  },
+
+  {
+    title: "Professional English",
+    videos: 25,
+    description: "Spoken English Training",
+    image:
+      "https://img.icons8.com/color/480/language.png",
+    videoUrl: "https://www.youtube.com/watch?v=juKd26qkNAw"
+  }
+
+];
+
+app.get("/courses", (req, res) => {
+
+  res.json(courses);
+
+});
+
 // ==========================
 // ðŸš€ SERVER START
 // ==========================
